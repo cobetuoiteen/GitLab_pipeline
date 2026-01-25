@@ -39,7 +39,7 @@ services:
       - "${GITLAB_SSH_PORT:-2222}:22"
 
     environment:
-      GITLAB_ROOT_PASSWORD: ${GITLAB_ROOT_PASSWORD:-Password_ma_hoa@123}
+      GITLAB_ROOT_PASSWORD: ${GITLAB_ROOT_PASSWORD:-Password@123}
       GITLAB_ROOT_EMAIL: ${GITLAB_ROOT_EMAIL:-root@example.local}
 
       GITLAB_OMNIBUS_CONFIG: |
@@ -71,11 +71,62 @@ services:
       - gitlab_logs:/var/log/gitlab
       - gitlab_data:/var/opt/gitlab
 
+    # Needed because runner services use condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/-/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+
     restart: unless-stopped
 
     mem_limit: 10g
     cpus: 4.0
     pids_limit: 4096
+
+  # Local Docker Registry for demo push/pull images
+  registry:
+    image: registry:2
+    container_name: lab-registry
+    profiles: ["core"]
+    ports:
+      - "${REGISTRY_PORT:-5000}:5000"
+    volumes:
+      - registry_data:/var/lib/registry
+    restart: unless-stopped
+
+  # Demo database (separate from GitLab DB) for Grafana datasource tests
+  appdb:
+    image: postgres:16
+    container_name: appdb
+    profiles: ["core"]
+    environment:
+      POSTGRES_USER: ${APPDB_USER:-app}
+      POSTGRES_PASSWORD: ${APPDB_PASSWORD:-apppass}
+      POSTGRES_DB: ${APPDB_DB:-appdb}
+    ports:
+      - "${APPDB_HOST_PORT:-5433}:5432"
+    volumes:
+      - appdb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${APPDB_USER:-app} -d ${APPDB_DB:-appdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    profiles: ["core"]
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
 
   gitlab-runner-register:
     image: gitlab/gitlab-runner:alpine
@@ -99,7 +150,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./runner-register.sh:/scripts/runner-register.sh:ro
     entrypoint: ["/bin/sh", "/scripts/runner-register.sh"]
-  
+
   gitlab-runner:
     image: gitlab/gitlab-runner:alpine
     container_name: gitlab-runner
@@ -129,7 +180,7 @@ services:
     restart: "no"
     environment:
       CI_SERVER_URL: ${CI_SERVER_URL:-http://gitlab}
-      RUNNER_TOKEN: ${RUNNER_DEPLOY_TOKEN:?set RUNNER_TOKEN=glrt-mCL2KJ5u8TAmf_pbGKqDQG86MQp0OjEKdToxCw.01.1203qjfux}
+      RUNNER_TOKEN: ${RUNNER_DEPLOY_TOKEN:?set RUNNER_DEPLOY_TOKEN=glrt-LtAmNs-jWBtp1LaRB8qYFm86MQp0OjEKdToxCw.01.1210xfokm}
       RUNNER_NAME: ${RUNNER_DEPLOY_NAME:-runner-deploy-01}
       DOCKER_IMAGE: ${DOCKER_IMAGE_DEPLOY:-alpine:3.20}
       RUNNER_TAG_LIST: ${RUNNER_DEPLOY_TAG_LIST:-deploy}
@@ -168,3 +219,6 @@ volumes:
   gitlab_runner_cache:
   gitlab_runner_deploy_config:
   gitlab_runner_deploy_cache:
+  registry_data:
+  grafana_data:
+  appdb_data:
