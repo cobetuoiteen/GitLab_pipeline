@@ -1,0 +1,28 @@
+stages: [build, test, scan, deploy]
+
+build:
+  stage: build
+  tags: [docker]
+  script:
+    - echo "build/compile here"
+
+test:
+  stage: test
+  tags: [docker]
+  script:
+    - echo "verify/test here"
+
+scan:
+  stage: scan
+  tags: [docker]
+  script:
+    - echo "scan deps for CVE here (trivy/grype/npm-audit/pip-audit...)"
+
+deploy:
+  stage: deploy
+  # chỉ runner deploy chạy
+  tags: [deploy]
+  # khóa deploy theo môi trường
+  resource_group: production
+  script:
+    - echo "deploy new container here"

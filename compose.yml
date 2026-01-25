@@ -1,0 +1,170 @@
+name: lab
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: gitlab-postgres
+    profiles: ["db", "core"]
+    environment:
+      POSTGRES_USER: ${GITLAB_DB_USER:-gitlab}
+      POSTGRES_PASSWORD: ${GITLAB_DB_PASSWORD:-gitlabpass}
+      POSTGRES_DB: ${GITLAB_DB_NAME:-gitlabhq_production}
+    volumes:
+      - gitlab_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${GITLAB_DB_USER:-gitlab} -d ${GITLAB_DB_NAME:-gitlabhq_production}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+    mem_limit: 2g
+    cpus: 1.0
+    pids_limit: 512
+
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    container_name: gitlab
+    profiles: ["scm", "core"]
+    stop_grace_period: 2m
+    stop_signal: SIGTERM
+    depends_on:
+      postgres:
+        condition: service_healthy
+    hostname: ${GITLAB_HOSTNAME:-gitlab.local}
+
+    ports:
+      - "${GITLAB_HTTP_PORT:-8080}:80"
+      - "${GITLAB_HTTPS_PORT:-8443}:443"
+      - "${GITLAB_SSH_PORT:-2222}:22"
+
+    environment:
+      GITLAB_ROOT_PASSWORD: ${GITLAB_ROOT_PASSWORD:-Password_ma_hoa@123}
+      GITLAB_ROOT_EMAIL: ${GITLAB_ROOT_EMAIL:-root@example.local}
+
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url '${GITLAB_EXTERNAL_URL:-http://${IP_LOCAL}:8080}'
+
+        nginx['listen_port'] = 80
+        nginx['listen_https'] = false
+        puma['worker_processes'] = 2
+        puma['min_threads'] = 2
+        puma['max_threads'] = 2
+        sidekiq['concurrency'] = 5
+
+        postgresql['enable'] = false
+        gitlab_rails['db_adapter'] = 'postgresql'
+        gitlab_rails['db_encoding'] = 'unicode'
+        gitlab_rails['db_host'] = '${GITLAB_DB_HOST:-postgres}'
+        gitlab_rails['db_port'] = ${GITLAB_DB_PORT:-5432}
+        gitlab_rails['db_database'] = '${GITLAB_DB_NAME:-gitlabhq_production}'
+        gitlab_rails['db_username'] = '${GITLAB_DB_USER:-gitlab}'
+        gitlab_rails['db_password'] = '${GITLAB_DB_PASSWORD:-gitlabpass}'
+
+        gitlab_rails['gitlab_shell_ssh_port'] = ${GITLAB_SSH_PORT:-2222}
+
+        # Using built-in Redis now, will improve later if needed.
+        # redis['enable'] = true
+
+    volumes:
+      - gitlab_config:/etc/gitlab
+      - gitlab_logs:/var/log/gitlab
+      - gitlab_data:/var/opt/gitlab
+
+    restart: unless-stopped
+
+    mem_limit: 10g
+    cpus: 4.0
+    pids_limit: 4096
+
+  gitlab-runner-register:
+    image: gitlab/gitlab-runner:alpine
+    container_name: gitlab-runner-register
+    profiles: ["ci"]
+    depends_on:
+      gitlab:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      CI_SERVER_URL: ${CI_SERVER_URL:-http://gitlab}
+      RUNNER_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN=glrt-mCL2KJ5u8TAmf_pbGKqDQG86MQp0OjEKdToxCw.01.1203qjfux}
+      RUNNER_NAME: ${RUNNER_NAME:-runner-laptop-01}
+      DOCKER_IMAGE: ${DOCKER_IMAGE:-alpine:3.20}
+      RUNNER_TAG_LIST: "${RUNNER_TAG_LIST:-docker,linux,lab}"
+      RUN_UNTAGGED: "${RUN_UNTAGGED:-true}"
+      DOCKER_NETWORK_MODE: "${DOCKER_NETWORK_MODE:-lab_default}"
+    volumes:
+      - gitlab_runner_config:/etc/gitlab-runner
+      - gitlab_runner_cache:/cache
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./runner-register.sh:/scripts/runner-register.sh:ro
+    entrypoint: ["/bin/sh", "/scripts/runner-register.sh"]
+  
+  gitlab-runner:
+    image: gitlab/gitlab-runner:alpine
+    container_name: gitlab-runner
+    profiles: ["ci", "runners"]
+    depends_on:
+      gitlab-runner-register:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    volumes:
+      - gitlab_runner_config:/etc/gitlab-runner
+      - gitlab_runner_cache:/cache
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    mem_limit: 1024m
+    cpus: 1.0
+    pids_limit: 256
+
+    command: ["run", "--working-directory=/home/gitlab-runner"]
+
+  gitlab-runner-deploy-register:
+    image: gitlab/gitlab-runner:alpine
+    container_name: gitlab-runner-deploy-register
+    profiles: ["ci"]
+    depends_on:
+      gitlab:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      CI_SERVER_URL: ${CI_SERVER_URL:-http://gitlab}
+      RUNNER_TOKEN: ${RUNNER_DEPLOY_TOKEN:?set RUNNER_TOKEN=glrt-mCL2KJ5u8TAmf_pbGKqDQG86MQp0OjEKdToxCw.01.1203qjfux}
+      RUNNER_NAME: ${RUNNER_DEPLOY_NAME:-runner-deploy-01}
+      DOCKER_IMAGE: ${DOCKER_IMAGE_DEPLOY:-alpine:3.20}
+      RUNNER_TAG_LIST: ${RUNNER_DEPLOY_TAG_LIST:-deploy}
+      RUN_UNTAGGED: ${RUN_UNTAGGED_DEPLOY:-false}
+      DOCKER_NETWORK_MODE: ${DOCKER_NETWORK_MODE:-lab_default}
+    volumes:
+      - gitlab_runner_deploy_config:/etc/gitlab-runner
+      - gitlab_runner_deploy_cache:/cache
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./runner-register.sh:/scripts/runner-register.sh:ro
+    entrypoint: ["/bin/sh", "/scripts/runner-register.sh"]
+
+  gitlab-runner-deploy:
+    image: gitlab/gitlab-runner:alpine
+    container_name: gitlab-runner-deploy
+    profiles: ["ci", "runners"]
+    depends_on:
+      gitlab-runner-deploy-register:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    volumes:
+      - gitlab_runner_deploy_config:/etc/gitlab-runner
+      - gitlab_runner_deploy_cache:/cache
+      - /var/run/docker.sock:/var/run/docker.sock
+    mem_limit: 1024m
+    cpus: 1.0
+    pids_limit: 256
+    command: ["run", "--working-directory=/home/gitlab-runner"]
+
+volumes:
+  gitlab_pgdata:
+  gitlab_config:
+  gitlab_logs:
+  gitlab_data:
+  gitlab_runner_config:
+  gitlab_runner_cache:
+  gitlab_runner_deploy_config:
+  gitlab_runner_deploy_cache:
