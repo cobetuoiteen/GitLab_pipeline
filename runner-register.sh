@@ -7,7 +7,7 @@ if [ -s /etc/gitlab-runner/config.toml ]; then
 fi
 
 : "${RUNNER_TOKEN:?RUNNER_TOKEN missing}"
-: "${CI_SERVER_URL:=http://gitlab}"
+: "${CI_SERVER_URL:=http://192.168.1.12:8080}"
 : "${RUNNER_NAME:=runner-01}"
 : "${DOCKER_IMAGE:=alpine:3.20}"
 : "${DOCKER_NETWORK_MODE:=lab_default}"

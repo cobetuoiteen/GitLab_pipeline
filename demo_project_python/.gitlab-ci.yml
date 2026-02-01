@@ -1,0 +1,114 @@
+stages: [build, test, scan, deploy]
+
+variables:
+  REGISTRY: "localhost:5000"
+  IMAGE_REPO: "$REGISTRY/truong-demo-project-python"
+  IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+  IMAGE_FULL: "$IMAGE_REPO:$IMAGE_TAG"
+  APP_HOST_PORT: "8088"           # host port for demo container
+  APP_CONTAINER_PORT: "80"        # nginx listens on 80
+  DEPLOY_CONTAINER: "demo-app"
+  DOCKER_BUILDKIT: "1"
+
+bandit:
+  stage: scan
+  image: python:3.11
+  tags: [scan]
+  before_script:
+    - python -V
+    - pip install -U pip
+    - pip install bandit
+  script:
+    - bandit -r . -ll
+
+build:
+  stage: build
+  image: python:3.11-alpine
+  tags: [scan]
+  script:
+    - apk add --no-cache docker-cli-buildx
+    - apk add --no-cache tar docker-cli
+    - XY="$(python -c "import json; d=json.load(open('tool.config.json')); print(f\"{d['version']['major']}.{d['version']['minor']}\")")"
+    - X="$(echo "$XY" | cut -d. -f1)"
+    - Y="$(echo "$XY" | cut -d. -f2)"
+    - Z="0"
+    - TOOL_TAR="tool_${X}_${Y}_${Z}.tar"
+    - IMAGE_TAG="tool_${X}_${Y}_${Z}"
+    - tar -cvf "$TOOL_TAR" --exclude=.git --exclude='*.tar' .
+    - docker buildx version
+    - docker version
+    - echo "Building $IMAGE_FULL"
+    # ví dụ registry nội bộ
+    - IMAGE_FULL="${IMAGE_REPO}:${IMAGE_TAG}"
+    - docker build -t "$IMAGE_FULL" .
+    - docker tag "$IMAGE_FULL" "$IMAGE_REPO:latest"
+    - docker push "$IMAGE_FULL"
+    - docker push "${IMAGE_REPO}:latest"
+  artifacts:
+    paths:
+      - tool_*.tar
+    expire_in: 7 days
+
+test:
+  stage: test
+  image: alpine:3.20
+  tags: [scan]
+  script:
+    - test -f Dockerfile
+    - test -f index.html
+    - grep -q "Hello from GitLab CI" index.html
+    - echo "Basic repo sanity OK"
+
+scan_cve:
+  stage: scan
+  image: python:3.11
+  tags: [scan]
+  allow_failure: false
+  before_script:
+    - python -V
+    - pip install -U pip
+    - pip install pip-audit
+  script:
+    # Audit requirements.txt (bắt buộc)
+    - pip-audit -r requirements.txt -f json -o pip_audit.json
+    - pip-audit -r requirements.txt
+
+    # Nếu có requirements-dev.txt thì audit thêm (không có thì bỏ qua)
+    - |
+      if [ -f requirements-dev.txt ]; then
+        pip-audit -r requirements-dev.txt -f json -o pip_audit_dev.json
+        pip-audit -r requirements-dev.txt
+      else
+        echo "No requirements-dev.txt, skip."
+      fi
+  artifacts:
+    when: always
+    paths:
+      - pip_audit.json
+      - pip_audit_dev.json
+    expire_in: 7 days
+
+scan:
+  stage: scan
+  image: docker:27-cli
+  tags: [scan]
+  script:
+    - echo "Scan filesystem (repo) with Trivy"
+    - docker run --rm -v "$CI_PROJECT_DIR:/repo" aquasec/trivy:latest fs --severity HIGH,CRITICAL --exit-code 0 /repo
+
+    - echo "Pull image for scanning"
+    - docker pull "${IMAGE_REPO}:latest"
+
+    - echo "Scan built image with Trivy"
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 0 "${IMAGE_REPO}:latest"
+
+deploy:
+  stage: deploy
+  image: docker:27-cli
+  tags: [deploy]
+  resource_group: production
+  script:
+    - echo "Deploying ${IMAGE_REPO}:latest -> container=$DEPLOY_CONTAINER port=$APP_HOST_PORT:$APP_CONTAINER_PORT"
+    - docker rm -f "$DEPLOY_CONTAINER" || true
+    - docker run -d --name "$DEPLOY_CONTAINER" --restart unless-stopped -p "$APP_HOST_PORT:$APP_CONTAINER_PORT" "${IMAGE_REPO}:latest"
+    - docker ps --filter "name=$DEPLOY_CONTAINER"

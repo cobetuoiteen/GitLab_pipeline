@@ -2,4 +2,4 @@ This project helps deploying a small pipeline for manage source code using GitLa
 
 This project should be deployed in private/ internal network.
 
-note: If you use this project for public or enterise/ business, please treat the .env careful. (manage the .gitignore file)
+note: If you use this project for public or enterise/ business, please treat the .env careful. (manage the .gitignore file CAREFUL)
